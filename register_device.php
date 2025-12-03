@@ -14,20 +14,17 @@ $success = '';
 // Handle device registration
 if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['register_device'])) {
     $serial_number = trim($_POST['serial_number']);
-    $device_type = trim($_POST['device_type']);
-    $brand = trim($_POST['brand']);
     $model = trim($_POST['model']);
-    $customer_name = trim($_POST['customer_name']);
-    $customer_email = trim($_POST['customer_email']);
-    $customer_phone = trim($_POST['customer_phone']);
-    $customer_address = trim($_POST['customer_address']);
+    $location = trim($_POST['location']);
+    $data_issued = trim($_POST['data_issued']);
+    $os = trim($_POST['os']);
     
     // Validation
-    if (empty($serial_number) || empty($device_type) || empty($customer_name)) {
+    if (empty($serial_number) || empty($model) || empty($location) || empty($data_issued) || empty($os)) {
         $error = 'Please fill in all required fields.';
     } else {
         // Check if serial number already exists
-        $stmt = $conn->prepare("SELECT id FROM devices WHERE serial_number = ?");
+        $stmt = $conn->prepare("SELECT id_device_tracking FROM device_tracking WHERE serial_number = ?");
         $stmt->bind_param("s", $serial_number);
         $stmt->execute();
         $result = $stmt->get_result();
@@ -36,8 +33,8 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['register_device'])) {
             $error = 'Device with this serial number already exists.';
         } else {
             // Insert new device
-            $stmt = $conn->prepare("INSERT INTO devices (serial_number, device_type, brand, model, customer_name, customer_email, customer_phone, customer_address) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
-            $stmt->bind_param("ssssssss", $serial_number, $device_type, $brand, $model, $customer_name, $customer_email, $customer_phone, $customer_address);
+            $stmt = $conn->prepare("INSERT INTO device_tracking (serial_number, model, location, data_issued, os) VALUES (?, ?, ?, ?, ?)");
+            $stmt->bind_param("sssss", $serial_number, $model, $location, $data_issued, $os);
             
             if ($stmt->execute()) {
                 $device_id = $conn->insert_id;
@@ -113,64 +110,38 @@ unset($_SESSION['pending_serial']);
                             </div>
 
                             <div>
-                                <label for="device_type" class="block text-sm font-medium text-gray-700">
-                                    Device Type <span class="text-red-500">*</span>
+                                <label for="model" class="block text-sm font-medium text-gray-700">
+                                    Model <span class="text-red-500">*</span>
                                 </label>
-                                <select id="device_type" name="device_type" required
-                                        class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm">
-                                    <option value="">Select device type</option>
-                                    <option value="Laptop">Laptop</option>
-                                    <option value="Desktop">Desktop</option>
-                                    <option value="Tablet">Tablet</option>
-                                    <option value="Smartphone">Smartphone</option>
-                                    <option value="Printer">Printer</option>
-                                    <option value="Monitor">Monitor</option>
-                                    <option value="Other">Other</option>
-                                </select>
-                            </div>
-
-                            <div>
-                                <label for="brand" class="block text-sm font-medium text-gray-700">Brand</label>
-                                <input type="text" id="brand" name="brand"
-                                       class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
-                                       placeholder="e.g., Dell, HP, Apple">
-                            </div>
-
-                            <div>
-                                <label for="model" class="block text-sm font-medium text-gray-700">Model</label>
-                                <input type="text" id="model" name="model"
+                                <input type="text" id="model" name="model" required
                                        class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
                                        placeholder="e.g., Inspiron 15, MacBook Pro">
                             </div>
 
-                            <div class="sm:col-span-2 border-t pt-6">
-                                <h3 class="text-lg font-medium text-gray-900 mb-4">Customer Information</h3>
-                            </div>
-
                             <div>
-                                <label for="customer_name" class="block text-sm font-medium text-gray-700">
-                                    Customer Name <span class="text-red-500">*</span>
+                                <label for="location" class="block text-sm font-medium text-gray-700">
+                                    Location <span class="text-red-500">*</span>
                                 </label>
-                                <input type="text" id="customer_name" name="customer_name" required
+                                <input type="text" id="location" name="location" required
+                                       class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                                       placeholder="e.g., Office, Warehouse, Department">
+                            </div>
+
+                            <div>
+                                <label for="data_issued" class="block text-sm font-medium text-gray-700">
+                                    Date Issued <span class="text-red-500">*</span>
+                                </label>
+                                <input type="date" id="data_issued" name="data_issued" required
                                        class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm">
                             </div>
 
                             <div>
-                                <label for="customer_phone" class="block text-sm font-medium text-gray-700">Phone</label>
-                                <input type="tel" id="customer_phone" name="customer_phone"
-                                       class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm">
-                            </div>
-
-                            <div>
-                                <label for="customer_email" class="block text-sm font-medium text-gray-700">Email</label>
-                                <input type="email" id="customer_email" name="customer_email"
-                                       class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm">
-                            </div>
-
-                            <div class="sm:col-span-2">
-                                <label for="customer_address" class="block text-sm font-medium text-gray-700">Address</label>
-                                <textarea id="customer_address" name="customer_address" rows="3"
-                                          class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"></textarea>
+                                <label for="os" class="block text-sm font-medium text-gray-700">
+                                    Operating System <span class="text-red-500">*</span>
+                                </label>
+                                <input type="text" id="os" name="os" required
+                                       class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                                       placeholder="e.g., Windows 11, macOS, Linux">
                             </div>
                         </div>
 

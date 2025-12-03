@@ -17,7 +17,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['search_device'])) {
     $serial_number = trim($_POST['serial_number']);
     
     if (!empty($serial_number)) {
-        $stmt = $conn->prepare("SELECT * FROM devices WHERE serial_number = ?");
+        $stmt = $conn->prepare("SELECT * FROM device_tracking WHERE serial_number = ?");
         $stmt->bind_param("s", $serial_number);
         $stmt->execute();
         $result = $stmt->get_result();
@@ -115,30 +115,26 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['search_device'])) {
                                     <dd class="mt-1 text-sm text-gray-900"><?php echo htmlspecialchars($device['serial_number']); ?></dd>
                                 </div>
                                 <div>
-                                    <dt class="text-sm font-medium text-gray-500">Device Type</dt>
-                                    <dd class="mt-1 text-sm text-gray-900"><?php echo htmlspecialchars($device['device_type']); ?></dd>
-                                </div>
-                                <div>
-                                    <dt class="text-sm font-medium text-gray-500">Brand</dt>
-                                    <dd class="mt-1 text-sm text-gray-900"><?php echo htmlspecialchars($device['brand'] ?? 'N/A'); ?></dd>
-                                </div>
-                                <div>
                                     <dt class="text-sm font-medium text-gray-500">Model</dt>
-                                    <dd class="mt-1 text-sm text-gray-900"><?php echo htmlspecialchars($device['model'] ?? 'N/A'); ?></dd>
+                                    <dd class="mt-1 text-sm text-gray-900"><?php echo htmlspecialchars($device['model']); ?></dd>
                                 </div>
                                 <div>
-                                    <dt class="text-sm font-medium text-gray-500">Customer Name</dt>
-                                    <dd class="mt-1 text-sm text-gray-900"><?php echo htmlspecialchars($device['customer_name']); ?></dd>
+                                    <dt class="text-sm font-medium text-gray-500">Location</dt>
+                                    <dd class="mt-1 text-sm text-gray-900"><?php echo htmlspecialchars($device['location']); ?></dd>
                                 </div>
                                 <div>
-                                    <dt class="text-sm font-medium text-gray-500">Customer Phone</dt>
-                                    <dd class="mt-1 text-sm text-gray-900"><?php echo htmlspecialchars($device['customer_phone'] ?? 'N/A'); ?></dd>
+                                    <dt class="text-sm font-medium text-gray-500">OS</dt>
+                                    <dd class="mt-1 text-sm text-gray-900"><?php echo htmlspecialchars($device['os']); ?></dd>
+                                </div>
+                                <div>
+                                    <dt class="text-sm font-medium text-gray-500">Date Issued</dt>
+                                    <dd class="mt-1 text-sm text-gray-900"><?php echo htmlspecialchars($device['data_issued']); ?></dd>
                                 </div>
                             </dl>
                         </div>
 
                         <div class="flex space-x-4">
-                            <a href="create_ticket.php?device_id=<?php echo $device['id']; ?>"
+                            <a href="create_ticket.php?device_id=<?php echo $device['id_device_tracking']; ?>"
                                class="flex-1 flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
                                 Create Ticket for This Device
                             </a>

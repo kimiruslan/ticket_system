@@ -13,16 +13,15 @@ $error = '';
 $success = '';
 $ticket = null;
 $feedback_exists = false;
+$assignment_id = null;
 
 // Fetch ticket information
 if ($ticket_id > 0) {
     $stmt = $conn->prepare("
-        SELECT t.*, d.serial_number, d.device_type, d.customer_name, d.customer_email, d.customer_phone,
-               tech.name as assigned_technician_name
-        FROM tickets t
-        LEFT JOIN devices d ON t.device_id = d.id
-        LEFT JOIN technicians tech ON t.assigned_technician_id = tech.id
-        WHERE t.id = ?
+        SELECT t.*, d.serial_number, d.model, d.location, d.os
+        FROM ticket_intake t
+        LEFT JOIN device_tracking d ON t.id_device_tracking = d.id_device_tracking
+        WHERE t.id_ticket_intake = ?
     ");
     $stmt->bind_param("i", $ticket_id);
     $stmt->execute();
@@ -30,12 +29,12 @@ if ($ticket_id > 0) {
     $ticket = $result->fetch_assoc();
     $stmt->close();
     
-    if (!$ticket) {
-        $error = 'Ticket not found.';
-    } else {
+    if ($ticket) {
+        $assignment_id = $ticket['id_technican_assignment'];
+        
         // Check if feedback already exists
-        $feedback_stmt = $conn->prepare("SELECT * FROM service_feedback WHERE ticket_id = ?");
-        $feedback_stmt->bind_param("i", $ticket_id);
+        $feedback_stmt = $conn->prepare("SELECT * FROM post_service_feedback WHERE id_technican_assignment = ?");
+        $feedback_stmt->bind_param("i", $assignment_id);
         $feedback_stmt->execute();
         $feedback_result = $feedback_stmt->get_result();
         $existing_feedback = $feedback_result->fetch_assoc();
@@ -44,6 +43,8 @@ if ($ticket_id > 0) {
         if ($existing_feedback) {
             $feedback_exists = true;
         }
+    } else {
+        $error = 'Ticket not found.';
     }
 } else {
     $error = 'Invalid ticket ID.';
@@ -51,49 +52,39 @@ if ($ticket_id > 0) {
 
 // Handle feedback submission
 if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['submit_feedback'])) {
-    $technician_notes = trim($_POST['technician_notes']);
-    $customer_satisfaction = isset($_POST['customer_satisfaction']) ? intval($_POST['customer_satisfaction']) : null;
-    $customer_feedback = trim($_POST['customer_feedback']);
-    $technician_id = $_SESSION['technician_id'];
+    $comment = trim($_POST['comment']);
+    $remark = trim($_POST['remark']);
+    $status = trim($_POST['status']);
+    $date_solved = date('Y-m-d');
     
-    if ($feedback_exists) {
-        // Update existing feedback
-        $stmt = $conn->prepare("UPDATE service_feedback SET technician_notes = ?, customer_satisfaction = ?, customer_feedback = ? WHERE ticket_id = ?");
-        $stmt->bind_param("sisi", $technician_notes, $customer_satisfaction, $customer_feedback, $ticket_id);
+    if (empty($comment) || empty($status)) {
+        $error = 'Please fill in all required fields.';
     } else {
-        // Insert new feedback
-        $stmt = $conn->prepare("INSERT INTO service_feedback (ticket_id, technician_notes, customer_satisfaction, customer_feedback, service_completed_at) VALUES (?, ?, ?, ?, NOW())");
-        $stmt->bind_param("isis", $ticket_id, $technician_notes, $customer_satisfaction, $customer_feedback);
-    }
-    
-    if ($stmt->execute()) {
-        // Update ticket status to closed
-        $update_ticket_stmt = $conn->prepare("UPDATE tickets SET status = 'closed', updated_at = CURRENT_TIMESTAMP WHERE id = ?");
-        $update_ticket_stmt->bind_param("i", $ticket_id);
-        $update_ticket_stmt->execute();
-        $update_ticket_stmt->close();
+        if ($feedback_exists) {
+            // Update existing feedback
+            $stmt = $conn->prepare("UPDATE post_service_feedback SET comment = ?, remark = ?, status = ?, date_solved = ? WHERE id_technican_assignment = ?");
+            $stmt->bind_param("ssssi", $comment, $remark, $status, $date_solved, $assignment_id);
+        } else {
+            // Insert new feedback
+            $stmt = $conn->prepare("INSERT INTO post_service_feedback (id_technican_assignment, comment, remark, status, date_solved) VALUES (?, ?, ?, ?, ?)");
+            $stmt->bind_param("issss", $assignment_id, $comment, $remark, $status, $date_solved);
+        }
         
-        // Add update record
-        $update_msg = "Service feedback submitted. Ticket closed.";
-        $update_stmt = $conn->prepare("INSERT INTO ticket_updates (ticket_id, technician_id, update_type, update_message) VALUES (?, ?, 'feedback', ?)");
-        $update_stmt->bind_param("iis", $ticket_id, $technician_id, $update_msg);
-        $update_stmt->execute();
-        $update_stmt->close();
-        
-        $success = 'Service feedback submitted successfully! Ticket is now closed.';
-        header("refresh:2;url=dashboard.php");
-    } else {
-        $error = 'Failed to submit feedback. Please try again.';
+        if ($stmt->execute()) {
+            $success = 'Service feedback submitted successfully! Ticket is now completed.';
+            header("refresh:2;url=dashboard.php");
+        } else {
+            $error = 'Failed to submit feedback. Please try again.';
+        }
+        $stmt->close();
     }
-    $stmt->close();
 }
 
 // Get parts used for this ticket
 $parts_stmt = $conn->prepare("
-    SELECT tp.*, p.name as part_name, p.part_number
-    FROM ticket_parts tp
-    LEFT JOIN parts p ON tp.part_id = p.id
-    WHERE tp.ticket_id = ?
+    SELECT * FROM part_usage
+    WHERE id_ticket_intake = ?
+    ORDER BY date DESC
 ");
 if ($ticket_id > 0) {
     $parts_stmt->bind_param("i", $ticket_id);
@@ -148,7 +139,7 @@ if ($ticket_id > 0) {
                         <!-- Ticket Info -->
                         <div class="bg-white shadow rounded-lg p-6">
                             <h2 class="text-2xl font-bold text-gray-900 mb-2">Service Feedback</h2>
-                            <p class="text-sm text-gray-600">Ticket #<?php echo htmlspecialchars($ticket['ticket_number']); ?> - <?php echo htmlspecialchars($ticket['device_type']); ?></p>
+                            <p class="text-sm text-gray-600">Ticket #<?php echo $ticket['id_ticket_intake']; ?> - <?php echo htmlspecialchars($ticket['model']); ?></p>
                         </div>
 
                         <?php if ($error): ?>
@@ -181,12 +172,13 @@ if ($ticket_id > 0) {
                                             <?php 
                                             $total_cost = 0;
                                             foreach ($used_parts as $part): 
-                                                $total_cost += $part['total_cost'];
+                                                $part_total = $part['quantity'] * $part['cost_price'];
+                                                $total_cost += $part_total;
                                             ?>
                                                 <tr>
                                                     <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900"><?php echo htmlspecialchars($part['part_name']); ?></td>
-                                                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900"><?php echo $part['quantity_used']; ?></td>
-                                                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">$<?php echo number_format($part['total_cost'], 2); ?></td>
+                                                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900"><?php echo $part['quantity']; ?></td>
+                                                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">$<?php echo number_format($part_total, 2); ?></td>
                                                 </tr>
                                             <?php endforeach; ?>
                                             <tr class="bg-gray-50">
@@ -204,38 +196,35 @@ if ($ticket_id > 0) {
                             <h3 class="text-lg font-medium text-gray-900 mb-4">Service Completion Details</h3>
                             <form method="POST" action="" class="space-y-6">
                                 <div>
-                                    <label for="technician_notes" class="block text-sm font-medium text-gray-700 mb-2">
-                                        Technician Notes <span class="text-red-500">*</span>
+                                    <label for="comment" class="block text-sm font-medium text-gray-700 mb-2">
+                                        Comment <span class="text-red-500">*</span>
                                     </label>
-                                    <textarea id="technician_notes" name="technician_notes" rows="5" required
+                                    <textarea id="comment" name="comment" rows="5" required
                                               class="block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
-                                              placeholder="Describe the work performed, issues resolved, and any additional notes..."><?php echo isset($existing_feedback['technician_notes']) ? htmlspecialchars($existing_feedback['technician_notes']) : ''; ?></textarea>
+                                              placeholder="Describe the work performed, issues resolved, and any additional notes..."><?php echo isset($existing_feedback['comment']) ? htmlspecialchars($existing_feedback['comment']) : ''; ?></textarea>
                                 </div>
 
                                 <div>
-                                    <label for="customer_satisfaction" class="block text-sm font-medium text-gray-700 mb-2">
-                                        Customer Satisfaction Rating
+                                    <label for="remark" class="block text-sm font-medium text-gray-700 mb-2">
+                                        Remark
                                     </label>
-                                    <div class="flex items-center space-x-4">
-                                        <?php for ($i = 1; $i <= 5; $i++): ?>
-                                            <label class="flex items-center">
-                                                <input type="radio" name="customer_satisfaction" value="<?php echo $i; ?>"
-                                                       class="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300"
-                                                       <?php echo (isset($existing_feedback['customer_satisfaction']) && $existing_feedback['customer_satisfaction'] == $i) ? 'checked' : ''; ?>>
-                                                <span class="ml-2 text-sm text-gray-700"><?php echo $i; ?></span>
-                                            </label>
-                                        <?php endfor; ?>
-                                        <span class="text-sm text-gray-500">(1 = Poor, 5 = Excellent)</span>
-                                    </div>
+                                    <textarea id="remark" name="remark" rows="3"
+                                              class="block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                                              placeholder="Any additional remarks or observations..."><?php echo isset($existing_feedback['remark']) ? htmlspecialchars($existing_feedback['remark']) : ''; ?></textarea>
                                 </div>
 
                                 <div>
-                                    <label for="customer_feedback" class="block text-sm font-medium text-gray-700 mb-2">
-                                        Customer Feedback/Comments
+                                    <label for="status" class="block text-sm font-medium text-gray-700 mb-2">
+                                        Status <span class="text-red-500">*</span>
                                     </label>
-                                    <textarea id="customer_feedback" name="customer_feedback" rows="3"
-                                              class="block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
-                                              placeholder="Any customer feedback or comments..."><?php echo isset($existing_feedback['customer_feedback']) ? htmlspecialchars($existing_feedback['customer_feedback']) : ''; ?></textarea>
+                                    <select id="status" name="status" required
+                                            class="block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm">
+                                        <option value="">Select status...</option>
+                                        <option value="Fixed" <?php echo (isset($existing_feedback['status']) && $existing_feedback['status'] == 'Fixed') ? 'selected' : ''; ?>>Fixed</option>
+                                        <option value="Resolved" <?php echo (isset($existing_feedback['status']) && $existing_feedback['status'] == 'Resolved') ? 'selected' : ''; ?>>Resolved</option>
+                                        <option value="Completed" <?php echo (isset($existing_feedback['status']) && $existing_feedback['status'] == 'Completed') ? 'selected' : ''; ?>>Completed</option>
+                                        <option value="Pending Review" <?php echo (isset($existing_feedback['status']) && $existing_feedback['status'] == 'Pending Review') ? 'selected' : ''; ?>>Pending Review</option>
+                                    </select>
                                 </div>
 
                                 <div class="flex justify-end space-x-4">
@@ -245,7 +234,7 @@ if ($ticket_id > 0) {
                                     </a>
                                     <button type="submit" name="submit_feedback"
                                             class="px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500">
-                                        Submit Feedback & Close Ticket
+                                        Submit Feedback & Complete Ticket
                                     </button>
                                 </div>
                             </form>
@@ -257,5 +246,3 @@ if ($ticket_id > 0) {
     </div>
 </body>
 </html>
-
-

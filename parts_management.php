@@ -12,15 +12,14 @@ $ticket_id = isset($_GET['ticket_id']) ? intval($_GET['ticket_id']) : 0;
 $error = '';
 $success = '';
 $ticket = null;
-$parts_needed = false;
 
 // Fetch ticket information
 if ($ticket_id > 0) {
     $stmt = $conn->prepare("
-        SELECT t.*, d.serial_number, d.device_type, d.customer_name
-        FROM tickets t
-        LEFT JOIN devices d ON t.device_id = d.id
-        WHERE t.id = ?
+        SELECT t.*, d.serial_number, d.model, d.location
+        FROM ticket_intake t
+        LEFT JOIN device_tracking d ON t.id_device_tracking = d.id_device_tracking
+        WHERE t.id_ticket_intake = ?
     ");
     $stmt->bind_param("i", $ticket_id);
     $stmt->execute();
@@ -35,16 +34,11 @@ if ($ticket_id > 0) {
     $error = 'Invalid ticket ID.';
 }
 
-// Fetch available parts
-$parts_stmt = $conn->query("SELECT * FROM parts ORDER BY name");
-$available_parts = $parts_stmt->fetch_all(MYSQLI_ASSOC);
-
 // Fetch parts already used in this ticket
 $used_parts_stmt = $conn->prepare("
-    SELECT tp.*, p.name as part_name, p.part_number
-    FROM ticket_parts tp
-    LEFT JOIN parts p ON tp.part_id = p.id
-    WHERE tp.ticket_id = ?
+    SELECT * FROM part_usage
+    WHERE id_ticket_intake = ?
+    ORDER BY date DESC
 ");
 if ($ticket_id > 0) {
     $used_parts_stmt->bind_param("i", $ticket_id);
@@ -58,93 +52,39 @@ if ($ticket_id > 0) {
 
 // Handle "No parts needed" action
 if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['no_parts_needed'])) {
-    // Update ticket status to completed
-    $stmt = $conn->prepare("UPDATE tickets SET status = 'completed', updated_at = CURRENT_TIMESTAMP WHERE id = ?");
-    $stmt->bind_param("i", $ticket_id);
-    
-    if ($stmt->execute()) {
-        // Add update record
-        $technician_id = $_SESSION['technician_id'];
-        $update_msg = "No parts needed. Moving to completion.";
-        $update_stmt = $conn->prepare("INSERT INTO ticket_updates (ticket_id, technician_id, update_type, update_message) VALUES (?, ?, 'status_change', ?)");
-        $update_stmt->bind_param("iis", $ticket_id, $technician_id, $update_msg);
-        $update_stmt->execute();
-        $update_stmt->close();
-        
-        $success = 'Ticket marked as completed. Redirecting to feedback...';
-        header("refresh:2;url=service_feedback.php?ticket_id=" . $ticket_id);
-    } else {
-        $error = 'Failed to update ticket status.';
-    }
-    $stmt->close();
+    $success = 'No parts needed. Redirecting to feedback...';
+    header("refresh:2;url=service_feedback.php?ticket_id=" . $ticket_id);
 }
 
 // Handle parts usage recording
 if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['record_parts'])) {
-    $part_id = intval($_POST['part_id']);
+    $part_name = trim($_POST['part_name']);
     $quantity = intval($_POST['quantity']);
+    $cost_price = floatval($_POST['cost_price']);
     
-    if ($part_id > 0 && $quantity > 0) {
-        // Get part information
-        $part_stmt = $conn->prepare("SELECT * FROM parts WHERE id = ?");
-        $part_stmt->bind_param("i", $part_id);
-        $part_stmt->execute();
-        $part_result = $part_stmt->get_result();
-        $part = $part_result->fetch_assoc();
-        $part_stmt->close();
+    if (!empty($part_name) && $quantity > 0 && $cost_price >= 0) {
+        // Record part usage
+        $date = date('Y-m-d');
+        $insert_stmt = $conn->prepare("INSERT INTO part_usage (id_ticket_intake, part_name, quantity, cost_price, date) VALUES (?, ?, ?, ?, ?)");
+        $insert_stmt->bind_param("isids", $ticket_id, $part_name, $quantity, $cost_price, $date);
         
-        if ($part && $part['quantity_in_stock'] >= $quantity) {
-            // Calculate costs
-            $unit_price = $part['unit_price'];
-            $total_cost = $unit_price * $quantity;
-            
-            // Record part usage
-            $insert_stmt = $conn->prepare("INSERT INTO ticket_parts (ticket_id, part_id, quantity_used, unit_price, total_cost) VALUES (?, ?, ?, ?, ?)");
-            $insert_stmt->bind_param("iiidd", $ticket_id, $part_id, $quantity, $unit_price, $total_cost);
-            
-            if ($insert_stmt->execute()) {
-                // Update stock
-                $update_stock_stmt = $conn->prepare("UPDATE parts SET quantity_in_stock = quantity_in_stock - ? WHERE id = ?");
-                $update_stock_stmt->bind_param("ii", $quantity, $part_id);
-                $update_stock_stmt->execute();
-                $update_stock_stmt->close();
-                
-                // Add update record
-                $technician_id = $_SESSION['technician_id'];
-                $update_msg = "Recorded part usage: " . $part['name'] . " (Qty: " . $quantity . ")";
-                $update_stmt = $conn->prepare("INSERT INTO ticket_updates (ticket_id, technician_id, update_type, update_message) VALUES (?, ?, 'parts_usage', ?)");
-                $update_stmt->bind_param("iis", $ticket_id, $technician_id, $update_msg);
-                $update_stmt->execute();
-                $update_stmt->close();
-                
-                $success = 'Part usage recorded successfully!';
-                header("Location: parts_management.php?ticket_id=" . $ticket_id);
-                exit();
-            } else {
-                $error = 'Failed to record part usage.';
-            }
-            $insert_stmt->close();
+        if ($insert_stmt->execute()) {
+            $success = 'Part usage recorded successfully!';
+            header("Location: parts_management.php?ticket_id=" . $ticket_id);
+            exit();
         } else {
-            $error = 'Insufficient stock or invalid part.';
+            $error = 'Failed to record part usage.';
         }
+        $insert_stmt->close();
     } else {
-        $error = 'Please select a part and enter quantity.';
+        $error = 'Please fill in all fields correctly.';
     }
 }
 
 // Handle "Finish recording parts"
 if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['finish_parts'])) {
-    // Update ticket status to completed
-    $stmt = $conn->prepare("UPDATE tickets SET status = 'completed', updated_at = CURRENT_TIMESTAMP WHERE id = ?");
-    $stmt->bind_param("i", $ticket_id);
-    
-    if ($stmt->execute()) {
-        $success = 'Parts recorded. Redirecting to feedback...';
-        header("refresh:2;url=service_feedback.php?ticket_id=" . $ticket_id);
-    } else {
-        $error = 'Failed to update ticket status.';
-    }
-    $stmt->close();
+    $success = 'Parts recorded. Redirecting to feedback...';
+    header("refresh:2;url=service_feedback.php?ticket_id=" . $ticket_id);
 }
 ?>
 <!DOCTYPE html>
@@ -190,7 +130,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['finish_parts'])) {
                         <!-- Ticket Info -->
                         <div class="bg-white shadow rounded-lg p-6">
                             <h2 class="text-2xl font-bold text-gray-900 mb-2">Parts Management</h2>
-                            <p class="text-sm text-gray-600">Ticket #<?php echo htmlspecialchars($ticket['ticket_number']); ?> - <?php echo htmlspecialchars($ticket['device_type']); ?> (<?php echo htmlspecialchars($ticket['serial_number']); ?>)</p>
+                            <p class="text-sm text-gray-600">Ticket #<?php echo $ticket['id_ticket_intake']; ?> - <?php echo htmlspecialchars($ticket['model']); ?> (<?php echo htmlspecialchars($ticket['serial_number']); ?>)</p>
                         </div>
 
                         <?php if ($error): ?>
@@ -214,29 +154,31 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['finish_parts'])) {
                                         <thead class="bg-gray-50">
                                             <tr>
                                                 <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Part Name</th>
-                                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Part Number</th>
                                                 <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Quantity</th>
-                                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Unit Price</th>
+                                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Cost Price</th>
                                                 <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Total Cost</th>
+                                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date</th>
                                             </tr>
                                         </thead>
                                         <tbody class="bg-white divide-y divide-gray-200">
                                             <?php 
                                             $total_cost = 0;
                                             foreach ($used_parts as $used_part): 
-                                                $total_cost += $used_part['total_cost'];
+                                                $part_total = $used_part['quantity'] * $used_part['cost_price'];
+                                                $total_cost += $part_total;
                                             ?>
                                                 <tr>
                                                     <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900"><?php echo htmlspecialchars($used_part['part_name']); ?></td>
-                                                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500"><?php echo htmlspecialchars($used_part['part_number'] ?? 'N/A'); ?></td>
-                                                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900"><?php echo $used_part['quantity_used']; ?></td>
-                                                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">$<?php echo number_format($used_part['unit_price'], 2); ?></td>
-                                                    <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">$<?php echo number_format($used_part['total_cost'], 2); ?></td>
+                                                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900"><?php echo $used_part['quantity']; ?></td>
+                                                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">$<?php echo number_format($used_part['cost_price'], 2); ?></td>
+                                                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">$<?php echo number_format($part_total, 2); ?></td>
+                                                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500"><?php echo date('M d, Y', strtotime($used_part['date'])); ?></td>
                                                 </tr>
                                             <?php endforeach; ?>
                                             <tr class="bg-gray-50">
-                                                <td colspan="4" class="px-6 py-4 text-right text-sm font-medium text-gray-900">Total:</td>
+                                                <td colspan="3" class="px-6 py-4 text-right text-sm font-medium text-gray-900">Total:</td>
                                                 <td class="px-6 py-4 whitespace-nowrap text-sm font-bold text-gray-900">$<?php echo number_format($total_cost, 2); ?></td>
+                                                <td></td>
                                             </tr>
                                         </tbody>
                                     </table>
@@ -248,23 +190,14 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['finish_parts'])) {
                         <div class="bg-white shadow rounded-lg p-6">
                             <h3 class="text-lg font-medium text-gray-900 mb-4">Record Part Usage</h3>
                             <form method="POST" action="" class="space-y-4">
-                                <div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                                <div class="grid grid-cols-1 gap-4 sm:grid-cols-4">
                                     <div>
-                                        <label for="part_id" class="block text-sm font-medium text-gray-700 mb-2">
-                                            Select Part
+                                        <label for="part_name" class="block text-sm font-medium text-gray-700 mb-2">
+                                            Part Name
                                         </label>
-                                        <select id="part_id" name="part_id" required
-                                                class="block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm">
-                                            <option value="">Select a part...</option>
-                                            <?php foreach ($available_parts as $part): ?>
-                                                <option value="<?php echo $part['id']; ?>" 
-                                                        data-stock="<?php echo $part['quantity_in_stock']; ?>"
-                                                        data-price="<?php echo $part['unit_price']; ?>">
-                                                    <?php echo htmlspecialchars($part['name']); ?> 
-                                                    (Stock: <?php echo $part['quantity_in_stock']; ?>, $<?php echo number_format($part['unit_price'], 2); ?>)
-                                                </option>
-                                            <?php endforeach; ?>
-                                        </select>
+                                        <input type="text" id="part_name" name="part_name" required
+                                               class="block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                                               placeholder="e.g., RAM 8GB, Hard Drive 1TB">
                                     </div>
                                     <div>
                                         <label for="quantity" class="block text-sm font-medium text-gray-700 mb-2">
@@ -272,6 +205,14 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['finish_parts'])) {
                                         </label>
                                         <input type="number" id="quantity" name="quantity" min="1" required
                                                class="block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm">
+                                    </div>
+                                    <div>
+                                        <label for="cost_price" class="block text-sm font-medium text-gray-700 mb-2">
+                                            Cost Price (per unit)
+                                        </label>
+                                        <input type="number" id="cost_price" name="cost_price" min="0" step="0.01" required
+                                               class="block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                                               placeholder="0.00">
                                     </div>
                                     <div class="flex items-end">
                                         <button type="submit" name="record_parts"
@@ -315,5 +256,3 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['finish_parts'])) {
     </div>
 </body>
 </html>
-
-
